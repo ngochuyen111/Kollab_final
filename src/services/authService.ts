@@ -14,6 +14,7 @@ export const authService = {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
     return user;
   },
+  setCurrentUser(user: AppUser): void { localStorage.setItem(STORAGE_KEY, JSON.stringify(user)); },
   logout(): void { localStorage.removeItem(STORAGE_KEY); },
   getCurrentUser(): AppUser | null {
     const raw = localStorage.getItem(STORAGE_KEY);

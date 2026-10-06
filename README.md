@@ -1,5 +1,7 @@
 # Kollab
 
+Hướng dẫn bản nâng cấp mới và luồng demo: [README_UPGRADE.md](README_UPGRADE.md). Đồng bộ TikTok: [TIKTOK_SYNC.md](TIKTOK_SYNC.md).
+
 Kollab is a React + TypeScript + Tailwind influencer collaboration application backed entirely by Supabase.
 
 ## Run locally

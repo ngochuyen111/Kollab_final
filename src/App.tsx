@@ -1,14 +1,19 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Activity, BarChart3, Bell, Briefcase, ClipboardList, CreditCard, Eye, LayoutDashboard,
+  Activity, BarChart3, Briefcase, ClipboardList, CreditCard, Eye, LayoutDashboard,
   LogOut, Menu, Moon, Package, Sun, UserCircle, Users, Wallet, X,
 } from 'lucide-react';
-import { AdminDashboard } from './views/admin/AdminPanel';
-import { BrandDashboard } from './views/brand/BrandDashboard';
-import { KOLDashboard } from './views/kol/KOLPortal';
+const AdminDashboard = lazy(() => import('./views/admin/AdminPanel').then(m => ({ default: m.AdminDashboard })));
+const BrandDashboard = lazy(() => import('./views/brand/BrandDashboard').then(m => ({ default: m.BrandDashboard })));
+const KOLDashboard = lazy(() => import('./views/kol/KOLPortal').then(m => ({ default: m.KOLDashboard }))); 
 import { authService } from './services/authService';
-import { getErrorMessage } from './constants/domain';
+import { Login } from './views/auth/Login';
+import { Logo } from './components/Logo';
+import { Avatar, Modal } from './components/SharedUI';
+import { AccountProfile } from './components/AccountProfile';
+import { NotificationBell } from './components/NotificationBell';
+import { userService } from './services/userService';
 import type { AppUser, UserRole } from './types/database';
 
 type NavItem = { id: string; label: string; icon: typeof LayoutDashboard };
@@ -26,6 +31,7 @@ const navigation: Record<UserRole, NavItem[]> = {
     { id: 'products', label: 'Sản phẩm', icon: Package },
     { id: 'campaigns', label: 'Chiến dịch', icon: BarChart3 },
     { id: 'kol', label: 'KOL/KOC', icon: Users },
+    { id: 'outcomes', label: 'Kết quả chiến dịch', icon: Activity },
     { id: 'tasks', label: 'Nhiệm vụ', icon: ClipboardList },
     { id: 'content', label: 'Phê duyệt nội dung', icon: Eye },
     { id: 'performance', label: 'Theo dõi hiệu suất', icon: Activity },
@@ -45,53 +51,25 @@ const navigation: Record<UserRole, NavItem[]> = {
   ],
 };
 
-function Login({ onLogin }: { onLogin: (user: AppUser) => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    try {
-      setLoading(true);
-      setError('');
-      onLogin(await authService.login(email, password));
-    } catch (caught) {
-      setError(getErrorMessage(caught));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md card-base p-8">
-        <div className="flex items-center gap-3 mb-8">
-          <img src="/logo.png" alt="Kollab" className="w-12 h-12 object-contain" />
-          <div><h1 className="text-2xl font-extrabold text-slate-900 dark:text-white">KOLLAB</h1><p className="text-sm text-slate-500">Influencer Marketing Platform</p></div>
-        </div>
-        <form onSubmit={submit} className="space-y-4">
-          <div><label className="input-label">Email</label><input className="input-base" type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" /></div>
-          <div><label className="input-label">Mật khẩu</label><input className="input-base" type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></div>
-          {error && <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-xl p-3">{error}</p>}
-          <button disabled={loading} className="btn-primary w-full" type="submit">{loading ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
-        </form>
-        <p className="mt-6 text-xs text-slate-400 text-center">Tài khoản được xác thực từ bảng users trên Supabase.</p>
-      </motion.div>
-    </div>
-  );
-}
-
 function App() {
   const [user, setUser] = useState<AppUser | null>(() => authService.getCurrentUser());
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('kollab_theme') === 'dark');
+  const [profileOpen, setProfileOpen] = useState(false);
+  const userId = user?.id;
+  const userRole = user?.role;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const initialView = user ? navigation[user.role][0].id : 'dashboard';
   const [activeView, setActiveView] = useState(initialView);
 
-  useEffect(() => { document.documentElement.classList.toggle('dark', darkMode); }, [darkMode]);
-  useEffect(() => { if (user) setActiveView(navigation[user.role][0].id); }, [user]);
+  useEffect(() => { document.documentElement.classList.toggle('dark', darkMode); localStorage.setItem('kollab_theme', darkMode ? 'dark' : 'light'); }, [darkMode]);
+  useEffect(() => { if (userRole) setActiveView(navigation[userRole][0].id); }, [userId, userRole]);
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    const refresh = async () => { try { const fresh = await userService.getById(userId); if (active) { authService.setCurrentUser(fresh); setUser(fresh); } } catch { /* Retain session on transient network failures. */ } };
+    void refresh(); window.addEventListener('kollab:user-updated', refresh);
+    return () => { active = false; window.removeEventListener('kollab:user-updated', refresh); };
+  }, [userId]);
 
   const roleLabel = useMemo(() => ({ ADMIN: 'Quản trị viên', BRAND: 'Brand', KOL: 'KOL', KOC: 'KOC' }[user?.role ?? 'BRAND']), [user]);
   if (!user) return <Login onLogin={setUser} />;
@@ -99,9 +77,9 @@ function App() {
   const items = navigation[user.role];
   const logout = () => { authService.logout(); setUser(null); };
   const content = user.role === 'ADMIN'
-    ? <AdminDashboard initialView={activeView} />
+    ? <AdminDashboard initialView={activeView} user={user} />
     : user.role === 'BRAND'
-      ? <BrandDashboard initialView={activeView} user={user} />
+      ? <BrandDashboard initialView={activeView} user={user} onNavigate={setActiveView} />
       : <KOLDashboard initialView={activeView} user={user} />;
 
   return (
@@ -110,14 +88,14 @@ function App() {
         <div className="h-full px-4 lg:px-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden btn-ghost p-2"><Menu className="w-5 h-5" /></button>
-            <img src="/logo.png" alt="Kollab" className="w-9 h-9 object-contain" />
+            <Logo />
             <div><h1 className="text-sm font-bold text-slate-900 dark:text-white">KOLLAB</h1><p className="text-[10px] text-slate-500">Quản lý chiến dịch KOL</p></div>
           </div>
           <div className="flex items-center gap-2">
             <span className="hidden sm:inline-flex badge-info">{roleLabel}</span>
-            <button className="btn-ghost p-2" title="Thông báo"><Bell className="w-5 h-5" /></button>
+            <NotificationBell key={user.id} userId={user.id} onNavigate={view => { if (items.some(i => i.id === view)) { setActiveView(view); window.dispatchEvent(new Event('kollab:refresh')); } }} />
             <button className="btn-ghost p-2" onClick={() => setDarkMode(v => !v)} title="Đổi giao diện">{darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-400 to-teal-600 text-white font-bold flex items-center justify-center">{user.full_name.slice(0, 2).toUpperCase()}</div>
+            <button aria-label="Hồ sơ tài khoản" title="Hồ sơ tài khoản" onClick={() => setProfileOpen(true)}><Avatar initials={user.full_name.slice(0, 2).toUpperCase()} image={user.avatar_url ?? undefined} role={user.role === 'ADMIN' ? 'admin' : user.role === 'BRAND' ? 'brand' : 'kol'} /></button>
           </div>
         </div>
       </header>
@@ -140,7 +118,8 @@ function App() {
         </div>
       </aside>
 
-      <main className="lg:ml-64 pt-16 min-h-screen"><div className="p-4 lg:p-8"><AnimatePresence mode="wait"><motion.div key={`${user.role}-${activeView}`} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}>{content}</motion.div></AnimatePresence></div></main>
+      <Modal isOpen={profileOpen} onClose={() => setProfileOpen(false)} title="Hồ sơ tài khoản">{profileOpen && <AccountProfile user={user} onSaved={setUser} onClose={() => setProfileOpen(false)} />}</Modal>
+      <main className="lg:ml-64 pt-16 min-h-screen"><div className="p-4 lg:p-8"><AnimatePresence mode="wait"><motion.div key={`${user.role}-${activeView}`} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}><Suspense fallback={<div className="skeleton h-96" />}>{content}</Suspense></motion.div></AnimatePresence></div></main>
     </div>
   );
 }

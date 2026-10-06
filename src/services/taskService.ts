@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase';
 import type { CampaignTask, CreateInput, TaskStatus, TaskWithRelations, UpdateInput } from '../types/database';
 import { insertWithSafeId } from './safeInsert';
+import { normalizeTaskRelations, type TaskRelationPayload } from '../utils/relations';
 
 const selectRelations = `
   *, campaigns(*, products(id, product_name, image_url, price), brands(id, brand_name, logo_url)),
@@ -12,12 +13,12 @@ export const taskService = {
   async getAll(): Promise<TaskWithRelations[]> {
     const { data, error } = await supabase.from('campaign_tasks').select(selectRelations).order('created_at', { ascending: false });
     if (error) throw error;
-    return (data ?? []) as TaskWithRelations[];
+    return ((data ?? []) as unknown as TaskRelationPayload[]).map(normalizeTaskRelations);
   },
   async getById(id: number): Promise<TaskWithRelations> {
     const { data, error } = await supabase.from('campaign_tasks').select(selectRelations).eq('id', id).single();
     if (error) throw error;
-    return data as TaskWithRelations;
+    return normalizeTaskRelations(data as unknown as TaskRelationPayload);
   },
   async create(input: CreateInput<CampaignTask>): Promise<CampaignTask> {
     return insertWithSafeId<CampaignTask>('campaign_tasks', input);
@@ -35,12 +36,12 @@ export const taskService = {
   async getTasksByCampaign(campaignId: number): Promise<TaskWithRelations[]> {
     const { data, error } = await supabase.from('campaign_tasks').select(selectRelations).eq('campaign_id', campaignId).order('created_at', { ascending: false });
     if (error) throw error;
-    return (data ?? []) as TaskWithRelations[];
+    return ((data ?? []) as unknown as TaskRelationPayload[]).map(normalizeTaskRelations);
   },
   async getTasksByKol(kolProfileId: number): Promise<TaskWithRelations[]> {
     const { data, error } = await supabase.from('campaign_tasks').select(selectRelations).eq('kol_profile_id', kolProfileId).order('created_at', { ascending: false });
     if (error) throw error;
-    return (data ?? []) as TaskWithRelations[];
+    return ((data ?? []) as unknown as TaskRelationPayload[]).map(normalizeTaskRelations);
   },
   getTasksByKOL(kolProfileId: number) { return this.getTasksByKol(kolProfileId); },
   updateTaskStatus(taskId: number, status: TaskStatus) { return this.update(taskId, { status }); },

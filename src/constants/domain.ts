@@ -40,4 +40,8 @@ export const formatDate = (value: string | null | undefined) => value
   ? new Intl.DateTimeFormat('vi-VN').format(new Date(value))
   : '—';
 
-export const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'Đã xảy ra lỗi. Vui lòng thử lại.';
+export const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') return error.message;
+  return 'Đã xảy ra lỗi. Vui lòng thử lại.';
+};

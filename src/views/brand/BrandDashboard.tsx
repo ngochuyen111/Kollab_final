@@ -1,6 +1,11 @@
+import { emptyFilters } from '../../constants/filters';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, Check, Edit3, Package, Plus, Trash2, Users, Wallet, X } from 'lucide-react';
-import { Avatar, Badge, Button, KPIWidget, Modal, SectionHeader, cardStyles, tableStyles } from '../../components/SharedUI';
+import { Check, Edit3, Package, Plus, Trash2, Eye, X } from 'lucide-react';
+import { Avatar, Badge, Button, Modal, SectionHeader, cardStyles, tableStyles } from '../../components/SharedUI';
+import { BrandOverview } from './BrandOverview';
+import { CampaignOutcome } from './CampaignOutcome';
+import { FilterBar } from '../../components/FilterBar';
+import { ImageUpload } from '../../components/ImageUpload';
 import { brandService } from '../../services/brandService';
 import { campaignService } from '../../services/campaignService';
 import { draftService, type DraftWithTask } from '../../services/draftService';
@@ -11,7 +16,7 @@ import { productService } from '../../services/productService';
 import { taskService } from '../../services/taskService';
 import { userService } from '../../services/userService';
 import {
-  campaignStatusLabels, formatCurrency, formatDate, getErrorMessage, metricStatusLabels,
+  campaignStatusLabels, draftStatusLabels, formatCurrency, formatDate, getErrorMessage, metricStatusLabels,
   paymentStatusLabels, statusBadgeClass, taskStatusLabels,
 } from '../../constants/domain';
 import type {
@@ -19,8 +24,8 @@ import type {
   Product, TaskWithRelations,
 } from '../../types/database';
 
-type BrandView = 'overview' | 'products' | 'campaigns' | 'kol' | 'tasks' | 'content' | 'performance' | 'payment';
-interface Props { initialView?: string; user: AppUser }
+type BrandView = 'outcomes' | 'overview' | 'products' | 'campaigns' | 'kol' | 'tasks' | 'content' | 'performance' | 'payment';
+interface Props { initialView?: string; user: AppUser; onNavigate: (view: string) => void }
 
 const inputClass = 'input-base';
 const labelClass = 'input-label';
@@ -33,8 +38,9 @@ function ErrorBanner({ message, retry }: { message: string; retry: () => void })
   return <div className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-300"><span>{message}</span><button onClick={retry} className="font-semibold underline">Tải lại</button></div>;
 }
 
-export function BrandDashboard({ initialView = 'overview', user }: Props) {
-  const view = (['overview', 'products', 'campaigns', 'kol', 'tasks', 'content', 'performance', 'payment'].includes(initialView) ? initialView : 'overview') as BrandView;
+export function BrandDashboard({ initialView = 'overview', user, onNavigate }: Props) {
+  const view = (['outcomes', 'overview', 'products', 'campaigns', 'kol', 'tasks', 'content', 'performance', 'payment'].includes(initialView) ? initialView : 'overview') as BrandView;
+  const [filters, setFilters] = useState({ ...emptyFilters });
   const [brand, setBrand] = useState<Brand | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignWithRelations[]>([]);
@@ -66,40 +72,62 @@ export function BrandDashboard({ initialView = 'overview', user }: Props) {
     } finally { setLoading(false); }
   }, [user.id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); window.addEventListener('kollab:refresh', load); return () => window.removeEventListener('kollab:refresh', load); }, [load]);
 
   if (loading) return <div className="space-y-4"><div className="skeleton h-9 w-60" /><div className="grid grid-cols-4 gap-4">{[1, 2, 3, 4].map(i => <div key={i} className="skeleton h-28" />)}</div><div className="skeleton h-80" /></div>;
   if (!brand) return <ErrorBanner message={error || 'Tài khoản này chưa được liên kết với hồ sơ Brand.'} retry={() => void load()} />;
 
-  const common = { brand, products, campaigns, kols, tasks, drafts, metrics, payments, reload: load };
-  return <>{error && <ErrorBanner message={error} retry={() => void load()} />}{view === 'overview' && <Overview {...common} />}{view === 'products' && <Products {...common} />}{view === 'campaigns' && <Campaigns {...common} />}{view === 'kol' && <Creators {...common} />}{view === 'tasks' && <Tasks {...common} />}{view === 'content' && <DraftReview {...common} reviewerId={user.id} />}{view === 'performance' && <Metrics {...common} reviewerId={user.id} />}{view === 'payment' && <Payments {...common} />}</>;
+  const match = (...values: (string | null | undefined)[]) => values.join(' ').toLocaleLowerCase('vi').includes(filters.query.trim().toLocaleLowerCase('vi'));
+  const statusMatch = (status: string) => !filters.status || filters.status === status;
+  const recent = (at?: string | null) => !filters.days || !!at && Date.parse(at) >= Date.now() - Number(filters.days) * 86400000;
+  const campaignMatch = (id: number) => {
+    const c = campaigns.find(c => c.id === id);
+    return (!filters.campaign || String(id) === filters.campaign) && (!filters.product || String(c?.product_id) === filters.product);
+  };
+  const taskMatch = (t: TaskWithRelations) => campaignMatch(t.campaign_id) && (!filters.creator || String(t.kol_profile_id) === filters.creator);
+  const matchingTasks = tasks.filter(taskMatch);
+  const matchingIds = new Set(matchingTasks.map(t => t.id));
+  const displayProducts = products.filter(p => match(p.product_name,p.description) && (!filters.product || String(p.id) === filters.product) && statusMatch(p.status));
+  const displayCampaigns = campaigns.filter(c => campaignMatch(c.id) && (!filters.creator || matchingTasks.some(t => t.campaign_id === c.id)) && match(c.campaign_name,c.products?.product_name,c.objective) && statusMatch(c.status) && recent(c.created_at || c.start_date));
+  const displayKols = kols.filter(k => (!filters.creator || String(k.id) === filters.creator) && match(k.users?.full_name,k.users?.email,k.platform,k.content_category) && statusMatch(k.users?.role ?? 'KOL'));
+  const displayTasks = matchingTasks.filter(t => match(t.campaigns?.campaign_name,t.kol_profiles?.users?.full_name,t.content_requirement,t.content_type) && statusMatch(t.status) && recent(t.created_at));
+  const displayDrafts = drafts.filter(d => matchingIds.has(d.task_id) && match(d.campaign_tasks?.campaigns?.campaign_name,d.campaign_tasks?.kol_profiles?.users?.full_name,d.caption) && statusMatch(d.status) && recent(d.submitted_at));
+  const displayMetrics = metrics.filter(m => matchingIds.has(m.task_id) && match(m.campaign_tasks?.campaigns?.campaign_name,m.campaign_tasks?.kol_profiles?.users?.full_name) && statusMatch(m.status) && recent(m.submitted_at));
+  const displayPayments = payments.filter(p => matchingIds.has(p.task_id) && match(p.kol_profiles?.users?.full_name,p.campaign_tasks?.campaigns?.campaign_name) && statusMatch(p.status));
+  const overviewCampaignIds = new Set(displayCampaigns.map(c => c.id));
+  const overviewTasks = matchingTasks.filter(t => overviewCampaignIds.has(t.campaign_id)).map(t => ({ ...t, performance_metrics: t.performance_metrics?.filter(m => recent(m.submitted_at)) }));
+  const overviewTaskIds = new Set(overviewTasks.map(t => t.id));
+  const common = { brand, products: displayProducts, campaigns: displayCampaigns, kols: displayKols,
+    tasks: view === 'overview' ? overviewTasks : displayTasks,
+    drafts: view === 'overview' ? drafts.filter(d => overviewTaskIds.has(d.task_id) && recent(d.submitted_at)) : displayDrafts,
+    metrics: view === 'overview' ? metrics.filter(m => overviewTaskIds.has(m.task_id) && recent(m.submitted_at)) : displayMetrics,
+    payments: view === 'overview' ? payments.filter(p => overviewTaskIds.has(p.task_id)) : displayPayments,
+    allProducts: products, allCampaigns: campaigns, allKols: kols, allTasks: tasks, reload: load };
+  const statusLabels = ['overview','campaigns','outcomes'].includes(view) ? campaignStatusLabels : view === 'products' ? { ACTIVE: 'Đang hoạt động', INACTIVE: 'Ngừng hoạt động' } : view === 'kol' ? { KOL: 'KOL', KOC: 'KOC' } : view === 'tasks' ? taskStatusLabels : view === 'content' ? draftStatusLabels : view === 'performance' ? metricStatusLabels : paymentStatusLabels;
+  return <>{error && <ErrorBanner message={error} retry={() => void load()} />}
+    <FilterBar value={filters} onChange={setFilters} statuses={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))}
+      campaigns={['overview','tasks','content','performance','payment','outcomes'].includes(view) ? campaigns.map(c => ({ value: String(c.id), label: c.campaign_name })) : undefined}
+      creators={['overview','kol','tasks','content','performance','payment','outcomes'].includes(view) ? kols.map(k => ({ value: String(k.id), label: k.users?.full_name ?? 'Creator' })) : undefined}
+      products={['overview','campaigns','outcomes'].includes(view) ? products.map(p => ({ value: String(p.id), label: p.product_name })) : undefined}
+      showTime={['overview','campaigns','tasks','content','performance'].includes(view)} />
+    {view === 'overview' && <BrandOverview {...common} onNavigate={onNavigate} />}
+    {view === 'outcomes' && <Outcomes {...common} />}
+    {view === 'products' && <Products {...common} />}{view === 'campaigns' && <Campaigns {...common} />}
+    {view === 'kol' && <Creators {...common} />}{view === 'tasks' && <Tasks {...common} />}
+    {view === 'content' && <DraftReview {...common} reviewerId={user.id} />}{view === 'performance' && <Metrics {...common} reviewerId={user.id} />}{view === 'payment' && <Payments {...common} />}</>;
+
 }
 
-interface DataProps {
+export interface DataProps {
+  allProducts: Product[]; allCampaigns: CampaignWithRelations[]; allKols: KolWithUser[]; allTasks: TaskWithRelations[];
   brand: Brand; products: Product[]; campaigns: CampaignWithRelations[]; kols: KolWithUser[];
   tasks: TaskWithRelations[]; drafts: DraftWithTask[]; metrics: MetricWithTask[];
   payments: PaymentWithRelations[]; reload: () => Promise<void>;
 }
 
-function Overview({ brand, campaigns, products, tasks, drafts, metrics, payments }: DataProps) {
-  const pendingDrafts = drafts.filter(item => item.status === 'SUBMITTED').length;
-  const pendingMetrics = metrics.filter(item => item.status === 'SUBMITTED').length;
-  const pendingPayments = payments.filter(item => item.status !== 'PAID').reduce((sum, item) => sum + (item.amount - item.paid_amount), 0);
-  return <div className="space-y-6">
-    <SectionHeader title={`Xin chào, ${brand.brand_name}`} subtitle="Dữ liệu được đồng bộ trực tiếp từ Supabase" />
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-      <KPIWidget label="Chiến dịch" value={String(campaigns.length)} icon={<Activity className="w-4 h-4" />} />
-      <KPIWidget label="Sản phẩm" value={String(products.length)} icon={<Package className="w-4 h-4" />} />
-      <KPIWidget label="Nhiệm vụ" value={String(tasks.length)} icon={<Users className="w-4 h-4" />} />
-      <KPIWidget label="Chờ thanh toán" value={formatCurrency(pendingPayments)} icon={<Wallet className="w-4 h-4" />} />
-    </div>
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div className={`${cardStyles.container} p-5`}><h3 className="font-bold text-slate-900 dark:text-white mb-4">Việc cần xử lý</h3><div className="space-y-3">
-        {[['Bản nháp chờ duyệt', pendingDrafts], ['Metrics chờ xác minh', pendingMetrics], ['Thanh toán chưa hoàn tất', payments.filter(p => p.status !== 'PAID').length]].map(([label, count]) => <div key={String(label)} className="flex justify-between rounded-xl bg-slate-50 dark:bg-slate-700/40 p-3"><span className="text-sm text-slate-600 dark:text-slate-300">{label}</span><span className="font-bold text-teal-600">{count}</span></div>)}
-      </div></div>
-      <div className={`${cardStyles.container} p-5`}><h3 className="font-bold text-slate-900 dark:text-white mb-4">Chiến dịch gần đây</h3>{campaigns.slice(0, 5).map(c => <div key={c.id} className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-slate-700 last:border-0"><div><p className="text-sm font-semibold text-slate-900 dark:text-white">{c.campaign_name}</p><p className="text-xs text-slate-400">{c.products?.product_name ?? 'Không có sản phẩm'}</p></div><span className={statusBadgeClass(c.status)}>{campaignStatusLabels[c.status]}</span></div>)}{campaigns.length === 0 && <Empty text="Chưa có chiến dịch" />}</div>
-    </div>
-  </div>;
+function Outcomes({ campaigns, allTasks }: DataProps) {
+  const [selected, setSelected] = useState<CampaignWithRelations | null>(null);
+  return <div><SectionHeader title="Kết quả chiến dịch" subtitle="Outcome chi tiết, so sánh KPI và xuất báo cáo" /><div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{campaigns.map(c => <button key={c.id} className="card-base p-5 text-left hover:border-teal-300 transition" onClick={() => setSelected(c)}><span className={statusBadgeClass(c.status)}>{campaignStatusLabels[c.status]}</span><h3 className="font-bold mt-3 text-slate-900 dark:text-white">{c.campaign_name}</h3><p className="text-sm text-slate-400 mt-1">{c.products?.product_name}</p><p className="text-sm text-teal-600 mt-4">Xem kết quả →</p></button>)}</div>{!campaigns.length && <Empty text="Chưa có chiến dịch phù hợp." />}<Modal isOpen={!!selected} onClose={() => setSelected(null)} title="Outcome chiến dịch" width="max-w-6xl">{selected && <CampaignOutcome campaign={selected} tasks={allTasks} />}</Modal></div>;
 }
 
 function Products({ brand, products, reload }: DataProps) {
@@ -113,18 +141,21 @@ function Products({ brand, products, reload }: DataProps) {
 
 function ProductForm({ brandId, product, close, reload }: { brandId: number; product: Product | null; close: () => void; reload: () => Promise<void> }) {
   const [form, setForm] = useState({ product_name: product?.product_name ?? '', description: product?.description ?? '', image_url: product?.image_url ?? '', product_link: product?.product_link ?? '', price: String(product?.price ?? ''), status: product?.status ?? 'ACTIVE' });
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   const submit = async (e: FormEvent) => { e.preventDefault(); try { setSaving(true); setError(''); const input = { brand_id: brandId, product_name: form.product_name.trim(), description: form.description || null, image_url: form.image_url || null, product_link: form.product_link || null, price: form.price ? Number(form.price) : null, status: form.status }; if (product) await productService.update(product.id, input); else await productService.create(input); await reload(); close(); } catch (caught) { setError(getErrorMessage(caught)); } finally { setSaving(false); } };
-  return <form onSubmit={submit} className="space-y-4"><div><label className={labelClass}>Tên sản phẩm *</label><input className={inputClass} required value={form.product_name} onChange={e => setForm({ ...form, product_name: e.target.value })} /></div><div><label className={labelClass}>Mô tả</label><textarea className={inputClass} rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></div><div className="grid grid-cols-2 gap-3"><div><label className={labelClass}>Giá</label><input className={inputClass} type="number" min="0" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div><div><label className={labelClass}>Trạng thái</label><select className={inputClass} value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}><option>ACTIVE</option><option>INACTIVE</option></select></div></div><div><label className={labelClass}>URL hình ảnh</label><input className={inputClass} type="url" value={form.image_url} onChange={e => setForm({ ...form, image_url: e.target.value })} /></div><div><label className={labelClass}>Link sản phẩm</label><input className={inputClass} type="url" value={form.product_link} onChange={e => setForm({ ...form, product_link: e.target.value })} /></div>{error && <p className="text-sm text-red-500">{error}</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>Hủy</Button><button className="btn-primary" disabled={saving} type="submit">{saving ? 'Đang lưu...' : 'Lưu sản phẩm'}</button></div></form>;
+  return <form onSubmit={submit} className="space-y-4"><div><label className={labelClass}>Tên sản phẩm *</label><input className={inputClass} required value={form.product_name} onChange={e => setForm({ ...form, product_name: e.target.value })} /></div><div><label className={labelClass}>Mô tả</label><textarea className={inputClass} rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></div><div className="grid grid-cols-2 gap-3"><div><label className={labelClass}>Giá</label><input className={inputClass} type="number" min="0" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div><div><label className={labelClass}>Trạng thái</label><select className={inputClass} value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}><option>ACTIVE</option><option>INACTIVE</option></select></div></div><ImageUpload label="Ảnh sản phẩm" folder="products" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} onBusyChange={setUploading} /><div><label className={labelClass}>Link sản phẩm</label><input className={inputClass} type="url" value={form.product_link} onChange={e => setForm({ ...form, product_link: e.target.value })} /></div>{error && <p className="text-sm text-red-500">{error}</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>Hủy</Button><button className="btn-primary" disabled={saving || uploading} type="submit">{saving ? 'Đang lưu...' : 'Lưu sản phẩm'}</button></div></form>;
 }
 
-function Campaigns({ brand, products, campaigns, reload }: DataProps) {
+function Campaigns({ brand, allProducts, allTasks, campaigns, reload }: DataProps) {
   const [editing, setEditing] = useState<CampaignWithRelations | null | undefined>(undefined);
+  const [outcome, setOutcome] = useState<CampaignWithRelations | null>(null);
   const setStatus = async (id: number, status: CampaignStatus) => { try { await campaignService.updateCampaignStatus(id, status); await reload(); } catch (e) { window.alert(getErrorMessage(e)); } };
   const remove = async (id: number) => { if (!window.confirm('Xóa chiến dịch này?')) return; try { await campaignService.delete(id); await reload(); } catch (e) { window.alert(getErrorMessage(e)); } };
   return <div><SectionHeader title="Quản lý chiến dịch" subtitle="Tạo, chỉnh sửa và điều khiển trạng thái chiến dịch" action={<Button onClick={() => setEditing(null)} icon={<Plus className="w-4 h-4" />}>Tạo chiến dịch</Button>} />
-    <div className={`${tableStyles.wrapper} bg-white dark:bg-slate-800`}><table className="w-full"><thead className={tableStyles.thead}><tr>{['Chiến dịch', 'Sản phẩm', 'Thời gian', 'Ngân sách', 'Trạng thái', 'Thao tác'].map(h => <th key={h} className={tableStyles.th}>{h}</th>)}</tr></thead><tbody>{campaigns.map(c => <tr key={c.id} className={`${tableStyles.tr} ${tableStyles.trHover}`}><td className={tableStyles.td}><p className="font-semibold text-slate-900 dark:text-white">{c.campaign_name}</p><p className="text-xs text-slate-400 line-clamp-1">{c.objective}</p></td><td className={tableStyles.td}>{c.products?.product_name ?? '—'}</td><td className={tableStyles.td}>{formatDate(c.start_date)} – {formatDate(c.end_date)}</td><td className={tableStyles.td}>{formatCurrency(c.budget)}</td><td className={tableStyles.td}><select className="input-base py-1.5" value={c.status} onChange={e => void setStatus(c.id, e.target.value as CampaignStatus)}>{Object.keys(campaignStatusLabels).map(s => <option key={s} value={s}>{campaignStatusLabels[s as CampaignStatus]}</option>)}</select></td><td className={tableStyles.td}><div className="flex gap-2"><button className="btn-ghost p-2" onClick={() => setEditing(c)}><Edit3 className="w-4 h-4" /></button><button className="btn-ghost p-2 text-red-500" onClick={() => void remove(c.id)}><Trash2 className="w-4 h-4" /></button></div></td></tr>)}</tbody></table>{campaigns.length === 0 && <Empty text="Chưa có chiến dịch" />}</div>
-    <Modal isOpen={editing !== undefined} onClose={() => setEditing(undefined)} title={editing ? 'Cập nhật chiến dịch' : 'Tạo chiến dịch'} width="max-w-3xl"><CampaignForm brandId={brand.id} products={products} campaign={editing ?? null} close={() => setEditing(undefined)} reload={reload} /></Modal>
+    <div className={`${tableStyles.wrapper} bg-white dark:bg-slate-800`}><table className="w-full"><thead className={tableStyles.thead}><tr>{['Chiến dịch', 'Sản phẩm', 'Thời gian', 'Ngân sách', 'Trạng thái', 'Thao tác'].map(h => <th key={h} className={tableStyles.th}>{h}</th>)}</tr></thead><tbody>{campaigns.map(c => <tr key={c.id} className={`${tableStyles.tr} ${tableStyles.trHover}`}><td className={tableStyles.td}><p className="font-semibold text-slate-900 dark:text-white">{c.campaign_name}</p><p className="text-xs text-slate-400 line-clamp-1">{c.objective}</p></td><td className={tableStyles.td}>{c.products?.product_name ?? '—'}</td><td className={tableStyles.td}>{formatDate(c.start_date)} – {formatDate(c.end_date)}</td><td className={tableStyles.td}>{formatCurrency(c.budget)}</td><td className={tableStyles.td}><select className="input-base py-1.5" value={c.status} onChange={e => void setStatus(c.id, e.target.value as CampaignStatus)}>{Object.keys(campaignStatusLabels).map(s => <option key={s} value={s}>{campaignStatusLabels[s as CampaignStatus]}</option>)}</select></td><td className={tableStyles.td}><div className="flex gap-2"><button className="btn-ghost p-2" title="Xem outcome" onClick={() => setOutcome(c)}><Eye className="w-4 h-4" /></button><button className="btn-ghost p-2" title="Sửa chiến dịch" onClick={() => setEditing(c)}><Edit3 className="w-4 h-4" /></button><button className="btn-ghost p-2 text-red-500" onClick={() => void remove(c.id)}><Trash2 className="w-4 h-4" /></button></div></td></tr>)}</tbody></table>{campaigns.length === 0 && <Empty text="Chưa có chiến dịch" />}</div>
+    <Modal isOpen={editing !== undefined} onClose={() => setEditing(undefined)} title={editing ? 'Cập nhật chiến dịch' : 'Tạo chiến dịch'} width="max-w-3xl"><CampaignForm brandId={brand.id} products={allProducts} campaign={editing ?? null} close={() => setEditing(undefined)} reload={reload} /></Modal>
+    <Modal isOpen={!!outcome} onClose={() => setOutcome(null)} title="Kết quả chiến dịch" width="max-w-6xl">{outcome && <CampaignOutcome campaign={outcome} tasks={allTasks} />}</Modal>
   </div>;
 }
 
@@ -143,6 +174,7 @@ function Creators({ brand, kols, reload }: DataProps) {
 
 function CreatorAccountForm({ brandId, close, reload }: { brandId: number; close: () => void; reload: () => Promise<void> }) {
   const [form, setForm] = useState({ full_name: '', email: '', password: '', role: 'KOL' as 'KOL' | 'KOC', avatar_url: '', bio: '', platform: 'TikTok', social_link: '', followers: '0', content_category: '' });
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const set = (key: keyof typeof form, value: string) => setForm(current => ({ ...current, [key]: value }));
@@ -170,12 +202,12 @@ function CreatorAccountForm({ brandId, close, reload }: { brandId: number; close
       setError(message.includes('users_email') || message.includes('duplicate key') ? 'Email này đã được sử dụng.' : message);
     } finally { setSaving(false); }
   };
-  return <form onSubmit={submit} className="space-y-4"><div className="grid sm:grid-cols-2 gap-4"><div><label className={labelClass}>Họ tên *</label><input required className={inputClass} value={form.full_name} onChange={e => set('full_name', e.target.value)} /></div><div><label className={labelClass}>Vai trò *</label><select className={inputClass} value={form.role} onChange={e => set('role', e.target.value)}><option value="KOL">KOL</option><option value="KOC">KOC</option></select></div><div><label className={labelClass}>Email đăng nhập *</label><input required type="email" className={inputClass} value={form.email} onChange={e => set('email', e.target.value)} /></div><div><label className={labelClass}>Mật khẩu *</label><input required minLength={6} type="password" className={inputClass} value={form.password} onChange={e => set('password', e.target.value)} /></div><div><label className={labelClass}>Nền tảng</label><input className={inputClass} value={form.platform} onChange={e => set('platform', e.target.value)} /></div><div><label className={labelClass}>Followers</label><input min="0" type="number" className={inputClass} value={form.followers} onChange={e => set('followers', e.target.value)} /></div><div><label className={labelClass}>Chuyên mục nội dung</label><input className={inputClass} value={form.content_category} onChange={e => set('content_category', e.target.value)} /></div><div><label className={labelClass}>Link mạng xã hội</label><input type="url" className={inputClass} value={form.social_link} onChange={e => set('social_link', e.target.value)} /></div></div><div><label className={labelClass}>URL avatar</label><input type="url" className={inputClass} value={form.avatar_url} onChange={e => set('avatar_url', e.target.value)} /></div><div><label className={labelClass}>Giới thiệu</label><textarea rows={3} className={inputClass} value={form.bio} onChange={e => set('bio', e.target.value)} /></div>{error && <p className="text-sm text-red-500">{error}</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>Hủy</Button><button disabled={saving} type="submit" className="btn-primary">{saving ? 'Đang tạo...' : 'Tạo tài khoản'}</button></div></form>;
+  return <form onSubmit={submit} className="space-y-4"><div className="grid sm:grid-cols-2 gap-4"><div><label className={labelClass}>Họ tên *</label><input required className={inputClass} value={form.full_name} onChange={e => set('full_name', e.target.value)} /></div><div><label className={labelClass}>Vai trò *</label><select className={inputClass} value={form.role} onChange={e => set('role', e.target.value)}><option value="KOL">KOL</option><option value="KOC">KOC</option></select></div><div><label className={labelClass}>Email đăng nhập *</label><input required type="email" className={inputClass} value={form.email} onChange={e => set('email', e.target.value)} /></div><div><label className={labelClass}>Mật khẩu *</label><input required minLength={6} type="password" className={inputClass} value={form.password} onChange={e => set('password', e.target.value)} /></div><div><label className={labelClass}>Nền tảng</label><input className={inputClass} value={form.platform} onChange={e => set('platform', e.target.value)} /></div><div><label className={labelClass}>Followers</label><input min="0" type="number" className={inputClass} value={form.followers} onChange={e => set('followers', e.target.value)} /></div><div><label className={labelClass}>Chuyên mục nội dung</label><input className={inputClass} value={form.content_category} onChange={e => set('content_category', e.target.value)} /></div><div><label className={labelClass}>Link mạng xã hội</label><input type="url" className={inputClass} value={form.social_link} onChange={e => set('social_link', e.target.value)} /></div></div><ImageUpload label="Avatar creator" folder="avatars" value={form.avatar_url} onChange={url => setForm(f => ({ ...f, avatar_url: url }))} onBusyChange={setUploading} /><div><label className={labelClass}>Giới thiệu</label><textarea rows={3} className={inputClass} value={form.bio} onChange={e => set('bio', e.target.value)} /></div>{error && <p className="text-sm text-red-500">{error}</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={close}>Hủy</Button><button disabled={saving || uploading} type="submit" className="btn-primary">{saving ? 'Đang tạo...' : 'Tạo tài khoản'}</button></div></form>;
 }
 
-function Tasks({ campaigns, kols, tasks, reload }: DataProps) {
+function Tasks({ allCampaigns, allKols, tasks, reload }: DataProps) {
   const [open, setOpen] = useState(false);
-  return <div><SectionHeader title="Phân công nhiệm vụ" subtitle="Giao campaign cho KOL/KOC" action={<Button onClick={() => setOpen(true)} icon={<Plus className="w-4 h-4" />}>Giao nhiệm vụ</Button>} /><div className={`${tableStyles.wrapper} bg-white dark:bg-slate-800`}><table className="w-full"><thead className={tableStyles.thead}><tr>{['KOL/KOC', 'Chiến dịch', 'Loại nội dung', 'Deadline', 'Thù lao', 'Trạng thái'].map(h => <th key={h} className={tableStyles.th}>{h}</th>)}</tr></thead><tbody>{tasks.map(task => <tr key={task.id} className={`${tableStyles.tr} ${tableStyles.trHover}`}><td className={tableStyles.td}>{task.kol_profiles?.users?.full_name ?? '—'}</td><td className={tableStyles.td}>{task.campaigns?.campaign_name ?? '—'}</td><td className={tableStyles.td}>{task.content_type}</td><td className={tableStyles.td}>{formatDate(task.draft_deadline)}</td><td className={tableStyles.td}>{formatCurrency(task.payment_amount)}</td><td className={tableStyles.td}><span className={statusBadgeClass(task.status)}>{taskStatusLabels[task.status]}</span></td></tr>)}</tbody></table>{tasks.length === 0 && <Empty text="Chưa có nhiệm vụ" />}</div><Modal isOpen={open} onClose={() => setOpen(false)} title="Giao nhiệm vụ cho KOL/KOC"><TaskForm campaigns={campaigns} kols={kols} close={() => setOpen(false)} reload={reload} /></Modal></div>;
+  return <div><SectionHeader title="Phân công nhiệm vụ" subtitle="Giao campaign cho KOL/KOC" action={<Button onClick={() => setOpen(true)} icon={<Plus className="w-4 h-4" />}>Giao nhiệm vụ</Button>} /><div className={`${tableStyles.wrapper} bg-white dark:bg-slate-800`}><table className="w-full"><thead className={tableStyles.thead}><tr>{['KOL/KOC', 'Chiến dịch', 'Loại nội dung', 'Deadline', 'Thù lao', 'Trạng thái'].map(h => <th key={h} className={tableStyles.th}>{h}</th>)}</tr></thead><tbody>{tasks.map(task => <tr key={task.id} className={`${tableStyles.tr} ${tableStyles.trHover}`}><td className={tableStyles.td}>{task.kol_profiles?.users?.full_name ?? '—'}</td><td className={tableStyles.td}>{task.campaigns?.campaign_name ?? '—'}</td><td className={tableStyles.td}>{task.content_type}</td><td className={tableStyles.td}>{formatDate(task.draft_deadline)}</td><td className={tableStyles.td}>{formatCurrency(task.payment_amount)}</td><td className={tableStyles.td}><span className={statusBadgeClass(task.status)}>{taskStatusLabels[task.status]}</span></td></tr>)}</tbody></table>{tasks.length === 0 && <Empty text="Chưa có nhiệm vụ" />}</div><Modal isOpen={open} onClose={() => setOpen(false)} title="Giao nhiệm vụ cho KOL/KOC"><TaskForm campaigns={allCampaigns} kols={allKols} close={() => setOpen(false)} reload={reload} /></Modal></div>;
 }
 
 function TaskForm({ campaigns, kols, close, reload }: { campaigns: CampaignWithRelations[]; kols: KolWithUser[]; close: () => void; reload: () => Promise<void> }) {
@@ -199,6 +231,6 @@ function Metrics({ metrics, reload, reviewerId }: DataProps & { reviewerId: numb
 function Payments({ payments, reload }: DataProps) {
   const [busy, setBusy] = useState<number | null>(null);
   const update = async (payment: PaymentWithRelations, status: PaymentStatus) => { try { setBusy(payment.id); await paymentService.updateStatus(payment.id, status, status === 'PARTIAL_PAID' ? Number(window.prompt('Số tiền đã thanh toán:', String(payment.paid_amount)) ?? payment.paid_amount) : undefined); await reload(); } catch (e) { window.alert(getErrorMessage(e)); } finally { setBusy(null); } };
-  const total = useMemo(() => payments.reduce((sum, p) => sum + p.amount, 0), [payments]);
+  const total = useMemo(() => payments.reduce((sum, p) => sum + Number(p.amount), 0), [payments]);
   return <div><SectionHeader title="Quản lý thanh toán" subtitle={`Tổng giá trị ${formatCurrency(total)}`} /><div className={`${tableStyles.wrapper} bg-white dark:bg-slate-800`}><table className="w-full"><thead className={tableStyles.thead}><tr>{['KOL/KOC', 'Chiến dịch', 'Số tiền', 'Đã trả', 'Trạng thái', 'Thao tác'].map(h => <th key={h} className={tableStyles.th}>{h}</th>)}</tr></thead><tbody>{payments.map(payment => <tr key={payment.id} className={tableStyles.tr}><td className={tableStyles.td}>{payment.kol_profiles?.users?.full_name ?? '—'}</td><td className={tableStyles.td}>{payment.campaign_tasks?.campaigns?.campaign_name ?? '—'}</td><td className={tableStyles.td}>{formatCurrency(payment.amount)}</td><td className={tableStyles.td}>{formatCurrency(payment.paid_amount)}</td><td className={tableStyles.td}><span className={statusBadgeClass(payment.status)}>{paymentStatusLabels[payment.status]}</span></td><td className={tableStyles.td}>{payment.status !== 'PAID' && <div className="flex gap-2"><Button size="xs" variant="secondary" disabled={busy === payment.id} onClick={() => void update(payment, 'HOLD')}>Tạm giữ</Button><Button size="xs" disabled={busy === payment.id} onClick={() => void update(payment, 'PAID')}>Đã trả</Button></div>}</td></tr>)}</tbody></table>{payments.length === 0 && <Empty text="Chưa có khoản thanh toán" />}</div></div>;
 }

@@ -1,6 +1,7 @@
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Copy, Check, TrendingUp, TrendingDown } from 'lucide-react';
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 
 // ─── DESIGN TOKENS ───────────────────────────────────────────────────────
 export const roleColors = {
@@ -74,7 +75,8 @@ interface ModalProps {
 }
 
 export function Modal({ isOpen, onClose, title, children, width = 'max-w-2xl' }: ModalProps) {
-  return (
+  useEffect(() => { if (!isOpen) return; const handle = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', handle); return () => window.removeEventListener('keydown', handle); }, [isOpen, onClose]);
+  return createPortal(
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -82,7 +84,8 @@ export function Modal({ isOpen, onClose, title, children, width = 'max-w-2xl' }:
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          role="dialog" aria-modal="true" aria-label={title}
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
           onClick={onClose}
         >
           <motion.div
@@ -106,7 +109,7 @@ export function Modal({ isOpen, onClose, title, children, width = 'max-w-2xl' }:
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>, document.body
   );
 }
 
@@ -128,12 +131,12 @@ export function KPIWidget({ label, value, change, positive, icon, role = 'brand'
     <motion.div
       whileHover={{ y: -2, scale: 1.01 }}
       transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-      className={`card-base p-5 ${colors.gradientLight} border-brand-200/40 dark:border-brand-700/40 card-hover relative h-full`}
+      className={`card-base p-5 ${colors.gradientLight} border-brand-200/40 dark:border-brand-700/40 card-hover relative h-full min-w-0`}
     >
       <div className="flex flex-col justify-between h-full pr-10">
         <div>
           <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">{label}</p>
-          <p className="text-2xl font-bold font-display text-slate-900 dark:text-white">{value}</p>
+          <p className="text-xl font-bold font-display break-words text-slate-900 dark:text-white">{value}</p>
         </div>
         {change && (
           <div className="flex items-center gap-1 mt-2">
@@ -156,7 +159,7 @@ export function KPIWidget({ label, value, change, positive, icon, role = 'brand'
         )}
       </div>
       <div className={`absolute top-4 right-4 p-1.5 rounded-lg ${colors.iconBg} shadow-sm`}>
-        <div className="w-4 h-4">{icon}</div>
+        <div className="w-4 h-4 [&>svg]:w-4 [&>svg]:h-4">{icon}</div>
       </div>
     </motion.div>
   );
@@ -211,6 +214,7 @@ export function Button({ children, onClick, variant = 'primary', size = 'md', cl
     <motion.button
       whileHover={{ scale: disabled ? 1 : 1.01 }}
       whileTap={{ scale: disabled ? 1 : 0.98 }}
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className={`inline-flex items-center justify-center ${sizes[size]} ${variantClass} ${className} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -223,10 +227,12 @@ export function Button({ children, onClick, variant = 'primary', size = 'md', cl
 // ─── AVATAR ──────────────────────────────────────────────────────────────
 export function Avatar({ initials, size = 'md', role = 'brand', image }: { initials: string; size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'; role?: RoleKey; image?: string }) {
   const sizes = { xs: 'w-6 h-6 text-[10px]', sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm', lg: 'w-12 h-12 text-base', xl: 'w-20 h-20 text-2xl' };
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [image]);
   const gradients = { admin: 'from-red-400 to-rose-500', brand: 'from-brand-400 to-brand-600', kol: 'from-blue-400 to-indigo-600' };
   return (
-    <div className={`${sizes[size]} rounded-xl bg-gradient-to-br ${gradients[role]} flex items-center justify-center text-white font-bold shadow-sm overflow-hidden`}>
-      {image ? <img src={image} alt={initials} className="w-full h-full object-cover" /> : initials}
+    <div className={`${sizes[size]} shrink-0 rounded-xl bg-gradient-to-br ${gradients[role]} flex items-center justify-center text-white font-bold shadow-sm overflow-hidden`}>
+      {image && !failed ? <img src={image} alt={initials} onError={() => setFailed(true)} className="w-full h-full object-cover" /> : initials}
     </div>
   );
 }
@@ -326,7 +332,7 @@ export function StarRating({ rating, max = 5 }: { rating: number; max?: number }
 // ─── SECTION HEADER ───────────────────────────────────────────────────────
 export function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
       <div>
         <h2 className="text-xl font-bold font-display text-slate-900 dark:text-white">{title}</h2>
         {subtitle && <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p>}
@@ -369,7 +375,7 @@ export function StatCard({ label, value, sub, trend, icon, color }: {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{label}</p>
-          <p className="text-2xl font-bold font-display text-slate-900 dark:text-white mt-1">{value}</p>
+          <p className="text-xl font-bold font-display break-words text-slate-900 dark:text-white mt-1">{value}</p>
           {sub && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{sub}</p>}
           {trend && (
             <div className={`flex items-center gap-1 mt-1.5 text-xs font-semibold ${trend.positive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
